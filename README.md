@@ -83,6 +83,9 @@ The hybrid approach eliminates obviously inferior images quickly while ensuring 
 ### 1. Setup
 - Click "Choose Image Folder" and select a directory containing images
 - Supported formats: JPG, PNG, WEBP, GIF, and other common image types
+
+**Note on "File Upload":** While it may appear that you're "uploading" files, you're actually just granting the browser permission to access your local images. Due to browser security restrictions, web applications cannot directly browse your file system - they need explicit permission through the file picker dialog. Your images never leave your computer and all processing happens locally in your browser.
+
 - Adjust settings:
   - **Target Final Count**: How many images you want ranked (default: 20)
   - **Initial Lives**: How many chances each image gets (default: 3)
