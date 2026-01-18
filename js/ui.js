@@ -1,449 +1,306 @@
+/**
+ * UIManager - Handles all DOM interactions and user interface
+ */
 class UIManager {
     constructor() {
         this.currentScreen = 'setup';
-        this.zoomModal = null;
         this.keyboardEnabled = true;
-        
-        this.initializeElements();
-        this.attachEventListeners();
-        this.setupKeyboardShortcuts();
+
+        this.cacheElements();
+        this.bindEvents();
     }
 
-    initializeElements() {
+    cacheElements() {
+        // Screens
         this.screens = {
             setup: document.getElementById('setup-screen'),
             tournament: document.getElementById('tournament-screen'),
             results: document.getElementById('results-screen')
         };
 
-        this.setupElements = {
-            imageInput: document.getElementById('image-input'),
-            csvInput: document.getElementById('csv-input'),
-            imageCount: document.getElementById('image-count'),
-            targetCount: document.getElementById('target-count'),
-            initialLives: document.getElementById('initial-lives'),
-            startButton: document.getElementById('start-tournament')
-        };
+        // Setup elements
+        this.imageInput = document.getElementById('image-input');
+        this.csvInput = document.getElementById('csv-input');
+        this.imageCount = document.getElementById('image-count');
+        this.targetCount = document.getElementById('target-count');
+        this.initialLives = document.getElementById('initial-lives');
+        this.startBtn = document.getElementById('start-tournament');
+        this.resumeSection = document.getElementById('resume-section');
+        this.resumeInfo = document.getElementById('resume-info');
+        this.resumeBtn = document.getElementById('resume-btn');
+        this.clearSessionBtn = document.getElementById('clear-session-btn');
 
-        this.tournamentElements = {
-            progressFill: document.getElementById('progress-fill'),
-            progressLabel: document.getElementById('progress-label'),
-            progressStats: document.getElementById('progress-stats'),
-            imageA: document.getElementById('image-a'),
-            imageB: document.getElementById('image-b'),
-            remainingImages: document.getElementById('remaining-images'),
-            eliminatedImages: document.getElementById('eliminated-images'),
-            currentRound: document.getElementById('current-round'),
-            pauseButton: document.getElementById('pause-tournament'),
-            exportButton: document.getElementById('export-csv')
-        };
+        // Tournament elements
+        this.progressFill = document.getElementById('progress-fill');
+        this.phaseLabel = document.getElementById('phase-label');
+        this.progressStats = document.getElementById('progress-stats');
+        this.imageA = document.getElementById('image-a');
+        this.imageB = document.getElementById('image-b');
+        this.remainingCount = document.getElementById('remaining-count');
+        this.eliminatedCount = document.getElementById('eliminated-count');
+        this.roundCount = document.getElementById('round-count');
+        this.pauseBtn = document.getElementById('pause-btn');
+        this.exportBtn = document.getElementById('export-btn');
+        this.comparisonButtons = document.querySelectorAll('.comparison-button');
 
-        this.comparisonButtons = {
-            aSlight: document.getElementById('a-slight'),
-            aKnockout: document.getElementById('a-knockout'),
-            bKnockout: document.getElementById('b-knockout'),
-            bSlight: document.getElementById('b-slight')
-        };
+        // Results elements
+        this.resultsSummary = document.getElementById('results-summary');
+        this.resultsGrid = document.getElementById('results-grid');
+        this.exportResultsBtn = document.getElementById('export-results-btn');
+        this.copyFilenamesBtn = document.getElementById('copy-filenames-btn');
+        this.newTournamentBtn = document.getElementById('new-tournament-btn');
 
-        this.resultsElements = {
-            finalCount: document.getElementById('final-count'),
-            totalProcessed: document.getElementById('total-processed'),
-            resultsGrid: document.getElementById('results-grid'),
-            exportResults: document.getElementById('export-results'),
-            newTournament: document.getElementById('new-tournament')
-        };
-
-        this.zoomModal = document.getElementById('zoom-modal');
+        // Modal elements
+        this.modal = document.getElementById('zoom-modal');
+        this.modalBackdrop = this.modal.querySelector('.modal-backdrop');
+        this.modalClose = this.modal.querySelector('.modal-close');
         this.zoomedImage = document.getElementById('zoomed-image');
     }
 
-    attachEventListeners() {
-        this.setupElements.imageInput.addEventListener('change', (e) => this.handleImageSelection(e));
-        this.setupElements.csvInput.addEventListener('change', (e) => this.handleCSVImport(e));
-        this.setupElements.startButton.addEventListener('click', () => this.startTournament());
+    bindEvents() {
+        // File inputs
+        this.imageInput.addEventListener('change', (e) => this.onImagesSelected?.(e.target.files));
+        this.csvInput.addEventListener('change', (e) => this.onCSVImport?.(e.target.files[0]));
 
-        Object.values(this.comparisonButtons).forEach((button, index) => {
-            const results = ['A_wins', 'A_ko', 'B_ko', 'B_wins'];
-            button.addEventListener('click', () => this.handleComparison(results[index]));
-        });
-
-        this.tournamentElements.pauseButton.addEventListener('click', () => this.pauseTournament());
-        this.tournamentElements.exportButton.addEventListener('click', () => this.exportCSV());
-
-        this.resultsElements.exportResults.addEventListener('click', () => this.exportResults());
-        this.resultsElements.newTournament.addEventListener('click', () => this.newTournament());
-
-        this.tournamentElements.imageA.addEventListener('click', () => this.showZoomedImage(this.tournamentElements.imageA.src));
-        this.tournamentElements.imageB.addEventListener('click', () => this.showZoomedImage(this.tournamentElements.imageB.src));
-
-        this.zoomModal.addEventListener('click', (e) => {
-            if (e.target === this.zoomModal) {
-                this.closeZoomModal();
-            }
-        });
-
-        document.querySelector('.close').addEventListener('click', () => this.closeZoomModal());
-
-        window.addEventListener('beforeunload', (e) => {
-            if (this.currentScreen === 'tournament' && this.onBeforeUnload) {
-                this.onBeforeUnload();
-                e.preventDefault();
-                e.returnValue = '';
-            }
-        });
-    }
-
-    setupKeyboardShortcuts() {
-        document.addEventListener('keydown', (e) => {
-            if (!this.keyboardEnabled || this.currentScreen !== 'tournament') return;
-
-            const keyMap = {
-                '1': 'A_wins',
-                '2': 'A_ko',
-                '3': 'B_ko',
-                '4': 'B_wins',
-                'Escape': 'close_zoom'
+        // Setup buttons
+        this.startBtn.addEventListener('click', () => {
+            const settings = {
+                targetCount: parseInt(this.targetCount.value) || 20,
+                initialLives: parseInt(this.initialLives.value) || 3
             };
-
-            if (keyMap[e.key]) {
-                e.preventDefault();
-                
-                if (e.key === 'Escape') {
-                    this.closeZoomModal();
-                } else {
-                    this.handleComparison(keyMap[e.key]);
-                }
-            }
+            this.onStartTournament?.(settings);
         });
+
+        this.resumeBtn?.addEventListener('click', () => this.onResume?.());
+        this.clearSessionBtn?.addEventListener('click', () => this.onClearSession?.());
+
+        // Comparison buttons
+        this.comparisonButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (!btn.disabled) {
+                    const result = btn.dataset.result;
+                    btn.classList.add('pressed');
+                    setTimeout(() => btn.classList.remove('pressed'), 150);
+                    this.onComparison?.(result);
+                }
+            });
+        });
+
+        // Tournament controls
+        this.pauseBtn.addEventListener('click', () => this.onPause?.());
+        this.exportBtn.addEventListener('click', () => this.onExport?.());
+
+        // Results controls
+        this.exportResultsBtn.addEventListener('click', () => this.onExportResults?.());
+        this.copyFilenamesBtn.addEventListener('click', () => this.onCopyFilenames?.());
+        this.newTournamentBtn.addEventListener('click', () => this.onNewTournament?.());
+
+        // Image zoom
+        this.imageA.addEventListener('click', () => this.showZoom(this.imageA.src));
+        this.imageB.addEventListener('click', () => this.showZoom(this.imageB.src));
+        this.modalBackdrop.addEventListener('click', () => this.hideZoom());
+        this.modalClose.addEventListener('click', () => this.hideZoom());
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => this.handleKeydown(e));
     }
 
-    showScreen(screenName) {
-        Object.values(this.screens).forEach(screen => screen.classList.remove('active'));
-        if (this.screens[screenName]) {
-            this.screens[screenName].classList.add('active');
-            this.currentScreen = screenName;
+    handleKeydown(e) {
+        // Escape always closes modal
+        if (e.key === 'Escape') {
+            this.hideZoom();
+            return;
+        }
+
+        // Number keys only work in tournament screen
+        if (this.currentScreen !== 'tournament' || !this.keyboardEnabled) return;
+
+        const keyMap = { '1': 'A_wins', '2': 'A_ko', '3': 'B_ko', '4': 'B_wins' };
+        const result = keyMap[e.key];
+
+        if (result) {
+            e.preventDefault();
+            this.onComparison?.(result);
         }
     }
 
-    handleImageSelection(event) {
-        const files = Array.from(event.target.files);
-        const imageFiles = files.filter(file => file.type.startsWith('image/'));
-        
-        this.updateImageCount(imageFiles.length);
-        this.setupElements.startButton.disabled = imageFiles.length === 0;
-        
-        if (this.onImagesSelected) {
-            this.onImagesSelected(imageFiles);
-        }
+    // Screen management
+    showScreen(name) {
+        Object.entries(this.screens).forEach(([key, el]) => {
+            el.classList.toggle('active', key === name);
+        });
+        this.currentScreen = name;
     }
 
+    // Setup screen
     updateImageCount(count) {
-        if (count === 0) {
-            this.setupElements.imageCount.textContent = 'No images selected';
-        } else {
-            this.setupElements.imageCount.textContent = `${count} images selected`;
-        }
+        this.imageCount.textContent = count > 0
+            ? `${count} images selected`
+            : 'No images selected';
+        this.startBtn.disabled = count === 0;
     }
 
-    handleCSVImport(event) {
-        const file = event.target.files[0];
-        if (file && this.onCSVImport) {
-            this.onCSVImport(file);
-        }
+    showResumeOption(info) {
+        this.resumeSection.style.display = 'block';
+        this.resumeInfo.textContent = info;
     }
 
-    startTournament() {
-        const settings = {
-            target_final_count: parseInt(this.setupElements.targetCount.value),
-            initial_lives: parseInt(this.setupElements.initialLives.value)
+    hideResumeOption() {
+        this.resumeSection.style.display = 'none';
+    }
+
+    getSettings() {
+        return {
+            targetCount: parseInt(this.targetCount.value) || 20,
+            initialLives: parseInt(this.initialLives.value) || 3
         };
-        
-        if (this.onStartTournament) {
-            this.onStartTournament(settings);
-        }
     }
 
-    showTournamentScreen() {
-        this.showScreen('tournament');
+    // Tournament screen
+    showComparison(imgA, imgB) {
+        this.loadImage(this.imageA, imgA);
+        this.loadImage(this.imageB, imgB);
+        this.enableButtons();
+    }
+
+    loadImage(imgEl, imageData) {
+        // Revoke previous object URL if exists
+        if (imgEl._objectUrl) {
+            URL.revokeObjectURL(imgEl._objectUrl);
+            imgEl._objectUrl = null;
+        }
+
+        if (imageData.blob) {
+            const url = URL.createObjectURL(imageData.blob);
+            imgEl._objectUrl = url;
+            imgEl.src = url;
+        } else {
+            imgEl.src = '';
+        }
+        imgEl.alt = imageData.filename;
     }
 
     updateProgress(progress) {
-        this.tournamentElements.progressFill.style.width = `${progress.progress_percentage}%`;
-        
-        const phaseLabel = progress.phase === 'knockout' ? 'Knockout Tournament' : 'Final Ranking';
-        this.tournamentElements.progressLabel.textContent = `Phase ${progress.phase === 'knockout' ? '1' : '2'}: ${phaseLabel}`;
-        
-        this.tournamentElements.progressStats.textContent = 
-            `${progress.completed_comparisons} / ${progress.total_estimated_comparisons} comparisons`;
-        
-        this.tournamentElements.remainingImages.textContent = progress.remaining_images;
-        this.tournamentElements.eliminatedImages.textContent = progress.eliminated_images;
-        this.tournamentElements.currentRound.textContent = progress.round;
+        this.progressFill.style.width = `${progress.percent}%`;
+
+        const phaseText = progress.phase === 'knockout'
+            ? `Phase 1: Knockout (Round ${progress.round})`
+            : 'Phase 2: Final Ranking';
+        this.phaseLabel.textContent = phaseText;
+
+        this.progressStats.textContent =
+            `${progress.completedComparisons} / ~${progress.estimatedTotal}`;
+
+        this.remainingCount.textContent = progress.activeImages;
+        this.eliminatedCount.textContent = progress.eliminatedImages;
+        this.roundCount.textContent = progress.round;
     }
 
-    displayComparison(imageA, imageB) {
-        this.displayImage(this.tournamentElements.imageA, imageA);
-        this.displayImage(this.tournamentElements.imageB, imageB);
-        
-        this.enableComparisonButtons();
-    }
-
-    displayImage(imgElement, imageData) {
-        if (imageData.blob) {
-            const url = URL.createObjectURL(imageData.blob);
-            imgElement.src = url;
-            imgElement.alt = imageData.filename;
-            
-            imgElement.onload = () => {
-                if (imgElement.previousObjectURL) {
-                    URL.revokeObjectURL(imgElement.previousObjectURL);
-                }
-                imgElement.previousObjectURL = url;
-            };
-        } else {
-            imgElement.src = imageData.path || '';
-            imgElement.alt = imageData.filename;
-        }
-    }
-
-    handleComparison(result) {
-        if (this.onComparison) {
-            this.disableComparisonButtons();
-            this.onComparison(result);
-        }
-    }
-
-    enableComparisonButtons() {
-        Object.values(this.comparisonButtons).forEach(button => {
-            button.disabled = false;
-        });
+    enableButtons() {
+        this.comparisonButtons.forEach(btn => btn.disabled = false);
         this.keyboardEnabled = true;
     }
 
-    disableComparisonButtons() {
-        Object.values(this.comparisonButtons).forEach(button => {
-            button.disabled = true;
-        });
+    disableButtons() {
+        this.comparisonButtons.forEach(btn => btn.disabled = true);
         this.keyboardEnabled = false;
     }
 
-    showZoomedImage(src) {
-        this.zoomedImage.src = src;
-        this.zoomModal.classList.add('active');
-    }
+    // Results screen
+    showResults(rankings, totalComparisons) {
+        this.resultsSummary.textContent =
+            `Top ${rankings.length} images ranked with ${totalComparisons} comparisons`;
 
-    closeZoomModal() {
-        this.zoomModal.classList.remove('active');
-    }
+        this.resultsGrid.innerHTML = '';
 
-    pauseTournament() {
-        if (this.onPause) {
-            this.onPause();
-        }
-        this.showScreen('setup');
-    }
+        rankings.forEach((img, idx) => {
+            const item = document.createElement('div');
+            item.className = 'result-item';
 
-    exportCSV() {
-        if (this.onExportCSV) {
-            this.onExportCSV();
-        }
-    }
+            const imgEl = document.createElement('img');
+            imgEl.className = 'result-image';
+            if (img.blob) {
+                imgEl.src = URL.createObjectURL(img.blob);
+            }
+            imgEl.alt = img.filename;
 
-    showResults(results, totalImages) {
-        this.showScreen('results');
-        
-        this.resultsElements.finalCount.textContent = results.length;
-        this.resultsElements.totalProcessed.textContent = totalImages;
-        
-        this.displayResults(results);
-    }
+            imgEl.addEventListener('click', () => this.showZoom(imgEl.src));
 
-    displayResults(results) {
-        const grid = this.resultsElements.resultsGrid;
-        grid.innerHTML = '';
-        
-        results.forEach((image, index) => {
-            const resultItem = document.createElement('div');
-            resultItem.className = 'result-item';
-            
-            const img = document.createElement('img');
-            img.className = 'result-image';
-            this.displayImage(img, image);
-            
             const info = document.createElement('div');
             info.className = 'result-info';
-            
-            const rank = document.createElement('div');
-            rank.className = 'result-rank';
-            rank.textContent = `#${index + 1}`;
-            
-            const filename = document.createElement('div');
-            filename.className = 'result-filename';
-            filename.textContent = image.filename;
-            
-            const rating = document.createElement('div');
-            rating.className = 'result-rating';
-            rating.textContent = `Rating: ${Math.round(image.rating)}`;
-            
-            info.appendChild(rank);
-            info.appendChild(filename);
-            info.appendChild(rating);
-            
-            resultItem.appendChild(img);
-            resultItem.appendChild(info);
-            
-            grid.appendChild(resultItem);
+            info.innerHTML = `
+                <div class="result-rank">#${idx + 1}</div>
+                <div class="result-filename">${img.filename}</div>
+                <div class="result-rating">Rating: ${Math.round(img.rating)}</div>
+            `;
+
+            item.appendChild(imgEl);
+            item.appendChild(info);
+            this.resultsGrid.appendChild(item);
         });
     }
 
-    exportResults() {
-        if (this.onExportResults) {
-            this.onExportResults();
-        }
+    // Modal
+    showZoom(src) {
+        if (!src) return;
+        this.zoomedImage.src = src;
+        this.modal.classList.add('active');
     }
 
-    newTournament() {
-        if (this.onNewTournament) {
-            this.onNewTournament();
-        }
-        this.showScreen('setup');
-        this.resetUI();
+    hideZoom() {
+        this.modal.classList.remove('active');
     }
 
-    resetUI() {
-        this.setupElements.imageInput.value = '';
-        this.setupElements.csvInput.value = '';
-        this.updateImageCount(0);
-        this.setupElements.startButton.disabled = true;
-        this.setupElements.targetCount.value = '20';
-        this.setupElements.initialLives.value = '3';
-        
-        this.tournamentElements.progressFill.style.width = '0%';
-        this.tournamentElements.imageA.src = '';
-        this.tournamentElements.imageB.src = '';
-        
-        this.resultsElements.resultsGrid.innerHTML = '';
-    }
+    // Notifications
+    showNotification(message, type = 'info') {
+        const colors = {
+            info: '#3498db',
+            success: '#27ae60',
+            error: '#e74c3c'
+        };
 
-    showError(message) {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'error-message';
-        errorDiv.style.cssText = `
+        const div = document.createElement('div');
+        div.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
-            background: #e74c3c;
+            background: ${colors[type]};
             color: white;
-            padding: 1rem;
+            padding: 1rem 1.5rem;
             border-radius: 8px;
-            z-index: 1000;
-            max-width: 300px;
-        `;
-        errorDiv.textContent = message;
-        
-        document.body.appendChild(errorDiv);
-        
-        setTimeout(() => {
-            if (errorDiv.parentNode) {
-                errorDiv.parentNode.removeChild(errorDiv);
-            }
-        }, 5000);
-    }
-
-    showSuccess(message) {
-        const successDiv = document.createElement('div');
-        successDiv.className = 'success-message';
-        successDiv.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: #27ae60;
-            color: white;
-            padding: 1rem;
-            border-radius: 8px;
-            z-index: 1000;
-            max-width: 300px;
-        `;
-        successDiv.textContent = message;
-        
-        document.body.appendChild(successDiv);
-        
-        setTimeout(() => {
-            if (successDiv.parentNode) {
-                successDiv.parentNode.removeChild(successDiv);
-            }
-        }, 3000);
-    }
-
-    showLoading(message = 'Loading...') {
-        const loadingDiv = document.createElement('div');
-        loadingDiv.id = 'loading-overlay';
-        loadingDiv.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.7);
-            display: flex;
-            align-items: center;
-            justify-content: center;
             z-index: 2000;
-            color: white;
-            font-size: 1.2rem;
+            max-width: 300px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            animation: slideIn 0.3s ease;
         `;
-        
-        const content = document.createElement('div');
-        content.style.textAlign = 'center';
-        content.innerHTML = `
-            <div class="spinner"></div>
-            <div style="margin-top: 1rem;">${message}</div>
-        `;
-        
-        loadingDiv.appendChild(content);
-        document.body.appendChild(loadingDiv);
-    }
+        div.textContent = message;
 
-    hideLoading() {
-        const loadingDiv = document.getElementById('loading-overlay');
-        if (loadingDiv) {
-            loadingDiv.remove();
+        // Add animation keyframes if not present
+        if (!document.getElementById('notification-styles')) {
+            const style = document.createElement('style');
+            style.id = 'notification-styles';
+            style.textContent = `
+                @keyframes slideIn {
+                    from { transform: translateX(100%); opacity: 0; }
+                    to { transform: translateX(0); opacity: 1; }
+                }
+            `;
+            document.head.appendChild(style);
         }
+
+        document.body.appendChild(div);
+        setTimeout(() => div.remove(), 3000);
     }
 
-    setComparisonHandler(handler) {
-        this.onComparison = handler;
-    }
-
-    setImagesSelectedHandler(handler) {
-        this.onImagesSelected = handler;
-    }
-
-    setStartTournamentHandler(handler) {
-        this.onStartTournament = handler;
-    }
-
-    setCSVImportHandler(handler) {
-        this.onCSVImport = handler;
-    }
-
-    setPauseHandler(handler) {
-        this.onPause = handler;
-    }
-
-    setExportCSVHandler(handler) {
-        this.onExportCSV = handler;
-    }
-
-    setExportResultsHandler(handler) {
-        this.onExportResults = handler;
-    }
-
-    setNewTournamentHandler(handler) {
-        this.onNewTournament = handler;
-    }
-
-    setBeforeUnloadHandler(handler) {
-        this.onBeforeUnload = handler;
+    // Reset
+    reset() {
+        this.imageInput.value = '';
+        this.csvInput.value = '';
+        this.updateImageCount(0);
+        this.targetCount.value = '20';
+        this.initialLives.value = '3';
+        this.hideResumeOption();
+        this.progressFill.style.width = '0%';
+        this.resultsGrid.innerHTML = '';
     }
 }

@@ -1,405 +1,461 @@
+/**
+ * Tournament - Implements the two-phase ranking algorithm
+ *
+ * Phase 1 (Knockout): Swiss-style tournament with Elo ratings
+ * Phase 2 (Ranking): True merge sort with human comparisons
+ */
 class Tournament {
-    constructor(images, settings) {
-        this.images = images.map(img => ({
-            ...img,
-            rating: img.rating || 1000,
-            eliminated: img.eliminated || false,
-            lives: img.lives !== undefined ? img.lives : settings.initial_lives,
-            comparisons: img.comparisons || 0
-        }));
-        
+    constructor(images, settings = {}) {
         this.settings = {
-            target_final_count: settings.target_final_count || 20,
-            initial_lives: settings.initial_lives || 3,
-            rating_change_slight: settings.rating_change_slight || 16,
-            rating_change_ko: settings.rating_change_ko || 50,
-            elimination_threshold: settings.elimination_threshold || 900
+            targetCount: settings.targetCount || 20,
+            initialLives: settings.initialLives || 3,
+            ratingChangeSlide: 16,
+            ratingChangeKO: 50,
+            eliminationThreshold: 900,
+            maxRounds: 20
         };
-        
+
+        // Initialize images
+        this.images = images.map(img => ({
+            filename: img.filename,
+            blob: img.blob,
+            rating: img.rating || 1000,
+            lives: img.lives !== undefined ? img.lives : this.settings.initialLives,
+            eliminated: img.eliminated || false,
+            comparisons: 0
+        }));
+
         this.phase = 'knockout';
         this.round = 1;
         this.comparisons = [];
         this.currentPair = null;
-        this.pairingHistory = new Map();
-        
-        this.maxRounds = Math.max(10, Math.ceil(Math.log2(this.images.length)));
+
+        // Comparison cache: "imgA:imgB" -> "A" or "B" (winner)
+        this.comparisonCache = new Map();
+
+        // Merge sort state for Phase 2
+        this.mergeState = null;
     }
 
-    static fromSessionData(sessionData) {
-        const tournament = new Tournament(sessionData.images, {
-            target_final_count: sessionData.tournament_state.target_final_count,
-            initial_lives: sessionData.tournament_state.initial_lives || 3,
-            rating_change_slight: 16,
-            rating_change_ko: 50,
-            elimination_threshold: 900
+    // Restore from saved session
+    static fromSession(session, imageBlobs) {
+        const blobMap = new Map();
+        imageBlobs.forEach(file => blobMap.set(file.name, file));
+
+        const images = session.images.map(img => ({
+            ...img,
+            blob: blobMap.get(img.filename) || null
+        }));
+
+        const tournament = new Tournament(images, {
+            targetCount: session.settings?.targetCount || 20,
+            initialLives: session.settings?.initialLives || 3
         });
-        
-        tournament.phase = sessionData.tournament_state.phase;
-        tournament.round = sessionData.tournament_state.round;
-        tournament.comparisons = sessionData.comparisons || [];
-        
-        tournament.pairingHistory = new Map();
-        tournament.comparisons.forEach(comp => {
-            const key = tournament.getPairingKey(comp.imageA, comp.imageB);
-            tournament.pairingHistory.set(key, (tournament.pairingHistory.get(key) || 0) + 1);
+
+        tournament.phase = session.phase || 'knockout';
+        tournament.round = session.round || 1;
+        tournament.comparisons = session.comparisons || [];
+
+        // Rebuild comparison cache
+        tournament.comparisons.forEach(c => {
+            const key = tournament.getCacheKey(c.imageA, c.imageB);
+            const winner = (c.result === 'A_wins' || c.result === 'A_ko') ? 'A' : 'B';
+            tournament.comparisonCache.set(key, winner);
         });
-        
+
+        // Restore merge state if in ranking phase
+        if (session.mergeState) {
+            tournament.mergeState = session.mergeState;
+        }
+
         return tournament;
     }
 
+    // Get session data for saving
+    getSessionData() {
+        return {
+            images: this.images.map(img => ({
+                filename: img.filename,
+                rating: img.rating,
+                lives: img.lives,
+                eliminated: img.eliminated
+            })),
+            settings: this.settings,
+            phase: this.phase,
+            round: this.round,
+            comparisons: this.comparisons,
+            mergeState: this.mergeState
+        };
+    }
+
+    // Main entry point - get next pair to compare
     getNextPair() {
         if (this.phase === 'knockout') {
             return this.getKnockoutPair();
-        } else if (this.phase === 'ranking') {
+        } else {
             return this.getRankingPair();
         }
-        return null;
     }
 
+    // Phase 1: Knockout tournament
     getKnockoutPair() {
-        const activeImages = this.getActiveImages();
-        
-        if (activeImages.length <= this.settings.target_final_count) {
+        const active = this.getActiveImages();
+
+        // Check if we should transition to ranking phase
+        if (active.length <= this.settings.targetCount) {
             this.phase = 'ranking';
             this.round = 1;
+            this.initMergeSort();
             return this.getRankingPair();
         }
-        
-        if (activeImages.length < 2) {
+
+        if (active.length < 2) {
             return null;
         }
 
-        let bestPair = null;
-        let bestScore = -1;
-        const maxAttempts = Math.min(50, activeImages.length * (activeImages.length - 1) / 2);
-        
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            const imageA = this.getRandomWeightedImage(activeImages);
-            const imageB = this.getRandomWeightedImage(activeImages.filter(img => img !== imageA));
-            
-            if (!imageB) continue;
-            
-            const pairKey = this.getPairingKey(imageA.filename, imageB.filename);
-            const pairCount = this.pairingHistory.get(pairKey) || 0;
-            const ratingDiff = Math.abs(imageA.rating - imageB.rating);
-            
-            const score = this.calculatePairScore(imageA, imageB, pairCount, ratingDiff);
-            
-            if (score > bestScore) {
-                bestScore = score;
-                bestPair = [imageA, imageB];
-            }
-            
-            if (pairCount === 0 && ratingDiff < 100) {
-                break;
-            }
+        // Find best pair: similar ratings, not recently compared
+        const pair = this.findBestKnockoutPair(active);
+        if (pair) {
+            this.currentPair = pair;
         }
-        
-        if (bestPair) {
-            this.currentPair = bestPair;
-            const pairKey = this.getPairingKey(bestPair[0].filename, bestPair[1].filename);
-            this.pairingHistory.set(pairKey, (this.pairingHistory.get(pairKey) || 0) + 1);
-        }
-        
-        return bestPair;
-    }
-
-    getRankingPair() {
-        const topImages = this.getTopImages();
-        
-        if (topImages.length < 2) {
-            return null;
-        }
-
-        if (!this.mergeSortPairs) {
-            this.initializeMergeSort(topImages);
-        }
-
-        return this.getNextMergeSortPair();
-    }
-
-    initializeMergeSort(images) {
-        this.sortedImages = [...images].sort((a, b) => b.rating - a.rating);
-        this.mergeSortPairs = [];
-        this.mergeSortIndex = 0;
-        
-        this.generateMergeSortPairs(this.sortedImages);
-    }
-
-    generateMergeSortPairs(images) {
-        if (images.length < 2) return;
-        
-        for (let i = 0; i < images.length - 1; i++) {
-            for (let j = i + 1; j < Math.min(i + 4, images.length); j++) {
-                this.mergeSortPairs.push([images[i], images[j]]);
-            }
-        }
-        
-        this.mergeSortPairs.sort(() => Math.random() - 0.5);
-    }
-
-    getNextMergeSortPair() {
-        if (this.mergeSortIndex >= this.mergeSortPairs.length) {
-            return null;
-        }
-        
-        const pair = this.mergeSortPairs[this.mergeSortIndex++];
-        this.currentPair = pair;
         return pair;
     }
 
-    calculatePairScore(imageA, imageB, pairCount, ratingDiff) {
-        let score = 100;
-        
-        score -= pairCount * 30;
-        
-        if (ratingDiff < 50) score += 30;
-        else if (ratingDiff < 100) score += 20;
-        else if (ratingDiff < 200) score += 10;
-        else score -= 10;
-        
-        const avgComparisons = (imageA.comparisons + imageB.comparisons) / 2;
-        const targetComparisons = this.round * 2;
-        if (avgComparisons < targetComparisons) {
-            score += 15;
-        }
-        
-        if (imageA.lives === 1 || imageB.lives === 1) {
-            score += 20;
-        }
-        
-        return score;
-    }
+    findBestKnockoutPair(active) {
+        let bestPair = null;
+        let bestScore = -Infinity;
 
-    getRandomWeightedImage(images) {
-        if (images.length === 0) return null;
-        if (images.length === 1) return images[0];
-        
-        const weights = images.map(img => {
-            let weight = 1;
-            
-            if (img.comparisons < this.round * 2) weight *= 2;
-            if (img.lives === 1) weight *= 1.5;
-            
-            const ratingNormalized = (img.rating - 800) / 400;
-            weight *= Math.max(0.5, ratingNormalized);
-            
-            return weight;
-        });
-        
-        const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-        const random = Math.random() * totalWeight;
-        
-        let cumulativeWeight = 0;
-        for (let i = 0; i < images.length; i++) {
-            cumulativeWeight += weights[i];
-            if (random <= cumulativeWeight) {
-                return images[i];
+        // Try multiple random pairs and pick the best
+        const attempts = Math.min(100, active.length * 3);
+
+        for (let i = 0; i < attempts; i++) {
+            const idx1 = Math.floor(Math.random() * active.length);
+            let idx2 = Math.floor(Math.random() * (active.length - 1));
+            if (idx2 >= idx1) idx2++;
+
+            const imgA = active[idx1];
+            const imgB = active[idx2];
+
+            const key = this.getCacheKey(imgA.filename, imgB.filename);
+            const timesCompared = this.countComparisons(imgA.filename, imgB.filename);
+            const ratingDiff = Math.abs(imgA.rating - imgB.rating);
+
+            // Score: prefer new pairs with similar ratings
+            let score = 100;
+            score -= timesCompared * 50; // Penalize repeated comparisons
+            score -= ratingDiff / 10;    // Prefer similar ratings
+            score += (imgA.lives === 1 || imgB.lives === 1) ? 20 : 0; // Prioritize at-risk images
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestPair = [imgA, imgB];
+            }
+
+            // Good enough - fresh pair with similar ratings
+            if (timesCompared === 0 && ratingDiff < 100) {
+                break;
             }
         }
-        
-        return images[images.length - 1];
+
+        return bestPair;
     }
 
+    countComparisons(filenameA, filenameB) {
+        return this.comparisons.filter(c =>
+            (c.imageA === filenameA && c.imageB === filenameB) ||
+            (c.imageA === filenameB && c.imageB === filenameA)
+        ).length;
+    }
+
+    // Phase 2: True merge sort
+    initMergeSort() {
+        const candidates = this.getActiveImages()
+            .sort((a, b) => b.rating - a.rating)
+            .slice(0, this.settings.targetCount);
+
+        // Initialize merge sort state
+        // Each image starts as a sorted "run" of size 1
+        this.mergeState = {
+            runs: candidates.map(img => [img]),
+            pendingMerge: null,
+            completed: false
+        };
+    }
+
+    getRankingPair() {
+        if (!this.mergeState) {
+            this.initMergeSort();
+        }
+
+        if (this.mergeState.completed) {
+            return null;
+        }
+
+        // If we have a pending merge, continue it
+        if (this.mergeState.pendingMerge) {
+            const pair = this.getNextMergePair();
+            if (pair) {
+                this.currentPair = pair;
+                return pair;
+            }
+        }
+
+        // Start a new merge operation
+        if (this.mergeState.runs.length >= 2) {
+            this.startNextMerge();
+            const pair = this.getNextMergePair();
+            if (pair) {
+                this.currentPair = pair;
+                return pair;
+            }
+        }
+
+        // Only one run left - we're done!
+        if (this.mergeState.runs.length === 1) {
+            this.mergeState.completed = true;
+        }
+
+        return null;
+    }
+
+    startNextMerge() {
+        // Take two runs to merge
+        const left = this.mergeState.runs.shift();
+        const right = this.mergeState.runs.shift();
+
+        this.mergeState.pendingMerge = {
+            left: left,
+            right: right,
+            leftIdx: 0,
+            rightIdx: 0,
+            result: []
+        };
+    }
+
+    getNextMergePair() {
+        const merge = this.mergeState.pendingMerge;
+        if (!merge) return null;
+
+        // Check if one side is exhausted
+        if (merge.leftIdx >= merge.left.length) {
+            // Add remaining right elements
+            while (merge.rightIdx < merge.right.length) {
+                merge.result.push(merge.right[merge.rightIdx++]);
+            }
+            this.completeMerge();
+            return this.getRankingPair(); // Continue with next merge
+        }
+
+        if (merge.rightIdx >= merge.right.length) {
+            // Add remaining left elements
+            while (merge.leftIdx < merge.left.length) {
+                merge.result.push(merge.left[merge.leftIdx++]);
+            }
+            this.completeMerge();
+            return this.getRankingPair(); // Continue with next merge
+        }
+
+        // Need to compare
+        const imgA = merge.left[merge.leftIdx];
+        const imgB = merge.right[merge.rightIdx];
+
+        // Check cache first
+        const cacheKey = this.getCacheKey(imgA.filename, imgB.filename);
+        const cached = this.comparisonCache.get(cacheKey);
+
+        if (cached) {
+            // Use cached result
+            this.applyMergeResult(cached === 'A' ? imgA : imgB, cached === 'A' ? imgB : imgA);
+            return this.getNextMergePair();
+        }
+
+        // Need human comparison
+        return [imgA, imgB];
+    }
+
+    applyMergeResult(winner, loser) {
+        const merge = this.mergeState.pendingMerge;
+        const leftImg = merge.left[merge.leftIdx];
+
+        if (winner.filename === leftImg.filename) {
+            merge.result.push(merge.left[merge.leftIdx++]);
+        } else {
+            merge.result.push(merge.right[merge.rightIdx++]);
+        }
+    }
+
+    completeMerge() {
+        const merge = this.mergeState.pendingMerge;
+        // Add the merged run back to the list
+        this.mergeState.runs.push(merge.result);
+        this.mergeState.pendingMerge = null;
+    }
+
+    // Process user's comparison decision
     processComparison(result) {
         if (!this.currentPair) {
-            throw new Error('No current pair to process');
+            throw new Error('No active comparison');
         }
-        
-        const [imageA, imageB] = this.currentPair;
+
+        const [imgA, imgB] = this.currentPair;
         const timestamp = new Date().toISOString();
-        
+
+        // Record comparison
         const comparison = {
-            imageA: imageA.filename,
-            imageB: imageB.filename,
+            imageA: imgA.filename,
+            imageB: imgB.filename,
             result: result,
             timestamp: timestamp,
             phase: this.phase,
             round: this.round
         };
-        
         this.comparisons.push(comparison);
-        
-        imageA.comparisons = (imageA.comparisons || 0) + 1;
-        imageB.comparisons = (imageB.comparisons || 0) + 1;
-        
-        this.updateRatings(imageA, imageB, result);
-        
-        this.checkEliminations();
-        
-        if (this.phase === 'knockout' && this.shouldAdvanceRound()) {
-            this.round++;
-            
-            if (this.round > this.maxRounds || this.getActiveImages().length <= this.settings.target_final_count) {
-                this.phase = 'ranking';
-                this.round = 1;
+
+        // Cache the result
+        const cacheKey = this.getCacheKey(imgA.filename, imgB.filename);
+        const winner = (result === 'A_wins' || result === 'A_ko') ? 'A' : 'B';
+        this.comparisonCache.set(cacheKey, winner);
+
+        // Update ratings
+        this.updateRatings(imgA, imgB, result);
+
+        if (this.phase === 'knockout') {
+            // Check for eliminations
+            this.checkEliminations();
+
+            // Check if round should advance
+            if (this.shouldAdvanceRound()) {
+                this.round++;
+                if (this.round > this.settings.maxRounds) {
+                    this.phase = 'ranking';
+                    this.round = 1;
+                    this.initMergeSort();
+                }
             }
+        } else {
+            // In ranking phase - apply merge result
+            const winnerImg = (result === 'A_wins' || result === 'A_ko') ? imgA : imgB;
+            const loserImg = (result === 'A_wins' || result === 'A_ko') ? imgB : imgA;
+            this.applyMergeResult(winnerImg, loserImg);
         }
-        
+
         this.currentPair = null;
-        
         return comparison;
     }
 
-    updateRatings(imageA, imageB, result) {
-        const kFactor = this.phase === 'knockout' ? 1.0 : 0.5;
-        
+    updateRatings(imgA, imgB, result) {
+        const k = this.phase === 'knockout' ? 1.0 : 0.5;
+
         switch (result) {
             case 'A_wins':
-                this.updateEloRatings(imageA, imageB, 1, this.settings.rating_change_slight * kFactor);
+                this.applyElo(imgA, imgB, k * this.settings.ratingChangeSlide);
                 break;
             case 'A_ko':
-                imageA.rating += this.settings.rating_change_ko * kFactor;
-                imageB.eliminated = true;
+                imgA.rating += k * this.settings.ratingChangeKO;
+                imgB.eliminated = true;
                 break;
             case 'B_wins':
-                this.updateEloRatings(imageB, imageA, 1, this.settings.rating_change_slight * kFactor);
+                this.applyElo(imgB, imgA, k * this.settings.ratingChangeSlide);
                 break;
             case 'B_ko':
-                imageB.rating += this.settings.rating_change_ko * kFactor;
-                imageA.eliminated = true;
+                imgB.rating += k * this.settings.ratingChangeKO;
+                imgA.eliminated = true;
                 break;
         }
-        
-        imageA.rating = Math.max(0, imageA.rating);
-        imageB.rating = Math.max(0, imageB.rating);
     }
 
-    updateEloRatings(winner, loser, result, kFactor) {
-        const expectedA = 1 / (1 + Math.pow(10, (loser.rating - winner.rating) / 400));
-        const expectedB = 1 - expectedA;
-        
-        winner.rating += kFactor * (result - expectedA);
-        loser.rating += kFactor * ((1 - result) - expectedB);
+    applyElo(winner, loser, k) {
+        const expected = 1 / (1 + Math.pow(10, (loser.rating - winner.rating) / 400));
+        winner.rating += k * (1 - expected);
+        loser.rating -= k * expected;
     }
 
     checkEliminations() {
-        this.images.forEach(img => {
-            if (!img.eliminated && img.rating < this.settings.elimination_threshold && img.lives <= 0) {
-                img.eliminated = true;
+        for (const img of this.images) {
+            if (img.eliminated) continue;
+
+            if (img.rating < this.settings.eliminationThreshold) {
+                if (img.lives > 0) {
+                    img.lives--;
+                } else {
+                    img.eliminated = true;
+                }
             }
-            
-            if (img.rating < this.settings.elimination_threshold && img.lives > 0) {
-                img.lives--;
-            }
-        });
+        }
     }
 
     shouldAdvanceRound() {
-        const activeImages = this.getActiveImages();
-        const roundComparisons = this.comparisons.filter(c => c.round === this.round && c.phase === 'knockout').length;
-        const targetComparisons = Math.max(activeImages.length / 4, 10);
-        
-        return roundComparisons >= targetComparisons || activeImages.length <= this.settings.target_final_count * 1.5;
+        const active = this.getActiveImages();
+        const roundComparisons = this.comparisons.filter(
+            c => c.phase === 'knockout' && c.round === this.round
+        ).length;
+
+        const target = Math.max(Math.floor(active.length / 3), 5);
+        return roundComparisons >= target;
+    }
+
+    // Helpers
+    getCacheKey(filenameA, filenameB) {
+        return filenameA < filenameB
+            ? `${filenameA}|${filenameB}`
+            : `${filenameB}|${filenameA}`;
     }
 
     getActiveImages() {
         return this.images.filter(img => !img.eliminated);
     }
 
-    getTopImages() {
-        return this.getActiveImages()
-            .sort((a, b) => b.rating - a.rating)
-            .slice(0, this.settings.target_final_count);
-    }
-
-    getEliminatedImages() {
-        return this.images.filter(img => img.eliminated);
+    isComplete() {
+        if (this.phase === 'knockout') {
+            return this.getActiveImages().length <= this.settings.targetCount &&
+                   this.mergeState?.completed;
+        }
+        return this.mergeState?.completed || false;
     }
 
     getFinalRankings() {
-        if (this.phase !== 'ranking') {
-            return this.getTopImages();
+        if (this.mergeState?.completed && this.mergeState.runs.length === 1) {
+            return this.mergeState.runs[0];
         }
-        
-        const rankings = this.getTopImages();
-        
-        if (this.mergeSortPairs && this.mergeSortIndex > 0) {
-            this.sortByComparisons(rankings);
-        }
-        
-        return rankings;
-    }
-
-    sortByComparisons(images) {
-        const wins = new Map();
-        images.forEach(img => wins.set(img.filename, 0));
-        
-        this.comparisons
-            .filter(c => c.phase === 'ranking')
-            .forEach(comp => {
-                if (comp.result === 'A_wins' || comp.result === 'A_ko') {
-                    wins.set(comp.imageA, (wins.get(comp.imageA) || 0) + 1);
-                } else if (comp.result === 'B_wins' || comp.result === 'B_ko') {
-                    wins.set(comp.imageB, (wins.get(comp.imageB) || 0) + 1);
-                }
-            });
-        
-        images.sort((a, b) => {
-            const winsA = wins.get(a.filename) || 0;
-            const winsB = wins.get(b.filename) || 0;
-            if (winsA !== winsB) return winsB - winsA;
-            return b.rating - a.rating;
-        });
-    }
-
-    getPairingKey(filenameA, filenameB) {
-        return filenameA < filenameB ? `${filenameA}:${filenameB}` : `${filenameB}:${filenameA}`;
+        // Fallback: sort by rating
+        return this.getActiveImages()
+            .sort((a, b) => b.rating - a.rating)
+            .slice(0, this.settings.targetCount);
     }
 
     getProgress() {
-        const activeImages = this.getActiveImages();
-        const totalImages = this.images.length;
-        const eliminatedImages = totalImages - activeImages.length;
-        
-        let totalComparisons = this.comparisons.length;
-        let estimatedTotal;
-        
+        const active = this.getActiveImages();
+        const total = this.images.length;
+        const eliminated = total - active.length;
+
+        let percent, estimated;
+
         if (this.phase === 'knockout') {
-            const remainingEliminations = Math.max(0, activeImages.length - this.settings.target_final_count);
-            const avgComparisonsPerElimination = eliminatedImages > 0 ? totalComparisons / eliminatedImages : 3;
-            estimatedTotal = totalComparisons + (remainingEliminations * avgComparisonsPerElimination);
+            // Estimate based on eliminations needed
+            const needed = Math.max(0, active.length - this.settings.targetCount);
+            const done = eliminated;
+            const totalNeeded = total - this.settings.targetCount;
+            percent = totalNeeded > 0 ? Math.round((done / totalNeeded) * 50) : 50;
+            estimated = Math.round(totalNeeded * 1.5);
         } else {
-            const rankingComparisons = this.settings.target_final_count * Math.log2(this.settings.target_final_count);
-            const knockoutComparisons = this.comparisons.filter(c => c.phase === 'knockout').length;
-            estimatedTotal = knockoutComparisons + rankingComparisons;
+            // Merge sort: n*log(n) comparisons
+            const n = this.settings.targetCount;
+            const knockoutComps = this.comparisons.filter(c => c.phase === 'knockout').length;
+            const rankingComps = this.comparisons.filter(c => c.phase === 'ranking').length;
+            const expectedRanking = Math.round(n * Math.log2(n));
+
+            percent = 50 + Math.min(50, Math.round((rankingComps / expectedRanking) * 50));
+            estimated = knockoutComps + expectedRanking;
         }
-        
-        const progress = Math.min(100, (totalComparisons / estimatedTotal) * 100);
-        
+
         return {
             phase: this.phase,
             round: this.round,
-            completed_comparisons: totalComparisons,
-            total_estimated_comparisons: Math.ceil(estimatedTotal),
-            progress_percentage: Math.round(progress),
-            remaining_images: activeImages.length,
-            eliminated_images: eliminatedImages
-        };
-    }
-
-    isComplete() {
-        const activeImages = this.getActiveImages();
-        
-        if (this.phase === 'knockout') {
-            return activeImages.length <= this.settings.target_final_count;
-        } else {
-            return !this.getNextPair();
-        }
-    }
-
-    getStats() {
-        const progress = this.getProgress();
-        const activeImages = this.getActiveImages();
-        
-        return {
-            ...progress,
-            total_images: this.images.length,
-            average_rating: Math.round(activeImages.reduce((sum, img) => sum + img.rating, 0) / activeImages.length),
-            highest_rating: Math.max(...activeImages.map(img => img.rating)),
-            lowest_rating: Math.min(...activeImages.map(img => img.rating)),
-            total_rounds: this.round,
-            comparisons_this_round: this.comparisons.filter(c => c.round === this.round && c.phase === this.phase).length
+            completedComparisons: this.comparisons.length,
+            estimatedTotal: estimated,
+            percent: Math.min(99, percent),
+            activeImages: active.length,
+            eliminatedImages: eliminated
         };
     }
 }

@@ -1,25 +1,38 @@
+/**
+ * StorageManager - Handles localStorage and CSV import/export
+ */
 class StorageManager {
     constructor() {
         this.sessionKey = 'imageRanker_session';
-        this.settingsKey = 'imageRanker_settings';
     }
 
-    saveSession(sessionData) {
+    // Session management
+    saveSession(data) {
         try {
-            localStorage.setItem(this.sessionKey, JSON.stringify(sessionData));
+            // Don't store blob data in localStorage
+            const cleanData = {
+                ...data,
+                images: data.images.map(img => ({
+                    filename: img.filename,
+                    rating: img.rating,
+                    lives: img.lives,
+                    eliminated: img.eliminated
+                }))
+            };
+            localStorage.setItem(this.sessionKey, JSON.stringify(cleanData));
             return true;
-        } catch (error) {
-            console.error('Error saving session:', error);
+        } catch (e) {
+            console.error('Failed to save session:', e);
             return false;
         }
     }
 
     loadSession() {
         try {
-            const sessionStr = localStorage.getItem(this.sessionKey);
-            return sessionStr ? JSON.parse(sessionStr) : null;
-        } catch (error) {
-            console.error('Error loading session:', error);
+            const data = localStorage.getItem(this.sessionKey);
+            return data ? JSON.parse(data) : null;
+        } catch (e) {
+            console.error('Failed to load session:', e);
             return null;
         }
     }
@@ -28,106 +41,56 @@ class StorageManager {
         localStorage.removeItem(this.sessionKey);
     }
 
-    saveSettings(settings) {
-        try {
-            localStorage.setItem(this.settingsKey, JSON.stringify(settings));
-            return true;
-        } catch (error) {
-            console.error('Error saving settings:', error);
-            return false;
-        }
+    hasSession() {
+        return localStorage.getItem(this.sessionKey) !== null;
     }
 
-    loadSettings() {
-        try {
-            const settingsStr = localStorage.getItem(this.settingsKey);
-            return settingsStr ? JSON.parse(settingsStr) : {
-                target_final_count: 20,
-                initial_lives: 3,
-                rating_change_slight: 16,
-                rating_change_ko: 50,
-                elimination_threshold: 900
-            };
-        } catch (error) {
-            console.error('Error loading settings:', error);
-            return {
-                target_final_count: 20,
-                initial_lives: 3,
-                rating_change_slight: 16,
-                rating_change_ko: 50,
-                elimination_threshold: 900
-            };
-        }
-    }
-
-    exportToCSV(comparisons, filename = 'tournament_data.csv') {
+    // CSV Export
+    exportComparisons(comparisons) {
         const headers = ['image_a', 'image_b', 'comparison', 'timestamp', 'phase', 'round'];
-        const csvContent = [
-            headers.join(','),
-            ...comparisons.map(comp => [
-                `"${comp.imageA}"`,
-                `"${comp.imageB}"`,
-                comp.result,
-                comp.timestamp,
-                comp.phase,
-                comp.round
-            ].join(','))
-        ].join('\n');
+        const rows = comparisons.map(c => [
+            this.escapeCSV(c.imageA),
+            this.escapeCSV(c.imageB),
+            c.result,
+            c.timestamp,
+            c.phase,
+            c.round
+        ].join(','));
 
-        this.downloadCSV(csvContent, filename);
+        const csv = [headers.join(','), ...rows].join('\n');
+        this.downloadFile(csv, `tournament_${this.getDateString()}.csv`, 'text/csv');
     }
 
-    exportResults(results, filename = 'tournament_results.csv') {
-        const headers = ['rank', 'filename', 'rating', 'final_score'];
-        const csvContent = [
-            headers.join(','),
-            ...results.map((result, index) => [
-                index + 1,
-                `"${result.filename}"`,
-                result.rating || 0,
-                result.finalScore || result.rating || 0
-            ].join(','))
-        ].join('\n');
+    exportResults(rankedImages) {
+        const headers = ['rank', 'filename', 'rating'];
+        const rows = rankedImages.map((img, i) => [
+            i + 1,
+            this.escapeCSV(img.filename),
+            Math.round(img.rating)
+        ].join(','));
 
-        this.downloadCSV(csvContent, filename);
+        const csv = [headers.join(','), ...rows].join('\n');
+        this.downloadFile(csv, `results_${this.getDateString()}.csv`, 'text/csv');
     }
 
-    downloadCSV(csvContent, filename) {
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        
-        if (link.download !== undefined) {
-            const url = URL.createObjectURL(blob);
-            link.setAttribute('href', url);
-            link.setAttribute('download', filename);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-        }
-    }
-
-    importFromCSV(file) {
+    // CSV Import
+    async importCSV(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
-            
-            reader.onload = (event) => {
+            reader.onload = (e) => {
                 try {
-                    const csv = event.target.result;
-                    const lines = csv.split('\n');
-                    const headers = lines[0].split(',').map(h => h.replace(/"/g, ''));
-                    
+                    const lines = e.target.result.split('\n');
+                    // Skip header line (index 0)
                     const comparisons = [];
                     for (let i = 1; i < lines.length; i++) {
                         const line = lines[i].trim();
                         if (!line) continue;
-                        
+
                         const values = this.parseCSVLine(line);
                         if (values.length >= 6) {
                             comparisons.push({
-                                imageA: values[0].replace(/"/g, ''),
-                                imageB: values[1].replace(/"/g, ''),
+                                imageA: values[0],
+                                imageB: values[1],
                                 result: values[2],
                                 timestamp: values[3],
                                 phase: values[4],
@@ -135,132 +98,62 @@ class StorageManager {
                             });
                         }
                     }
-                    
                     resolve(comparisons);
-                } catch (error) {
-                    reject(error);
+                } catch (err) {
+                    reject(err);
                 }
             };
-            
             reader.onerror = () => reject(reader.error);
             reader.readAsText(file);
         });
     }
 
+    // Helpers
     parseCSVLine(line) {
         const values = [];
         let current = '';
         let inQuotes = false;
-        
-        for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            
+
+        for (const char of line) {
             if (char === '"') {
                 inQuotes = !inQuotes;
             } else if (char === ',' && !inQuotes) {
-                values.push(current);
+                values.push(current.trim());
                 current = '';
             } else {
                 current += char;
             }
         }
-        
-        values.push(current);
+        values.push(current.trim());
         return values;
     }
 
-    createSessionData(images, tournamentState, comparisons = []) {
-        return {
-            images: images.map(img => ({
-                filename: img.filename,
-                path: img.path,
-                rating: img.rating || 1000,
-                eliminated: img.eliminated || false,
-                lives: img.lives !== undefined ? img.lives : 3,
-                blob: img.blob
-            })),
-            tournament_state: {
-                phase: tournamentState.phase || 'knockout',
-                round: tournamentState.round || 1,
-                target_final_count: tournamentState.target_final_count || 20,
-                completed_comparisons: comparisons.length,
-                total_estimated_comparisons: tournamentState.total_estimated_comparisons || 0
-            },
-            comparisons: comparisons,
-            timestamp: new Date().toISOString()
-        };
+    escapeCSV(str) {
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+            return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
     }
 
-    validateSessionData(sessionData) {
-        if (!sessionData) return false;
-        
-        const required = ['images', 'tournament_state'];
-        for (const field of required) {
-            if (!sessionData[field]) return false;
-        }
-        
-        if (!Array.isArray(sessionData.images)) return false;
-        if (!sessionData.tournament_state.phase) return false;
-        
-        return true;
+    downloadFile(content, filename, type) {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
-    migrateOldSessionData(sessionData) {
-        if (!sessionData.tournament_state.target_final_count) {
-            sessionData.tournament_state.target_final_count = 20;
-        }
-        
-        if (!sessionData.comparisons) {
-            sessionData.comparisons = [];
-        }
-        
-        sessionData.images.forEach(img => {
-            if (img.rating === undefined) img.rating = 1000;
-            if (img.eliminated === undefined) img.eliminated = false;
-            if (img.lives === undefined) img.lives = 3;
+    getDateString() {
+        return new Date().toISOString().split('T')[0];
+    }
+
+    copyToClipboard(text) {
+        navigator.clipboard.writeText(text).catch(e => {
+            console.error('Failed to copy:', e);
         });
-        
-        return sessionData;
-    }
-
-    compressImages(images) {
-        return images.map(img => ({
-            ...img,
-            blob: null
-        }));
-    }
-
-    async restoreImageBlobs(compressedImages, fileList) {
-        const fileMap = new Map();
-        Array.from(fileList).forEach(file => {
-            fileMap.set(file.name, file);
-        });
-
-        return compressedImages.map(img => ({
-            ...img,
-            blob: fileMap.get(img.filename) || null
-        }));
-    }
-
-    getStorageUsage() {
-        try {
-            let total = 0;
-            for (let key in localStorage) {
-                if (localStorage.hasOwnProperty(key)) {
-                    total += localStorage[key].length;
-                }
-            }
-            return {
-                used: total,
-                usedMB: (total / (1024 * 1024)).toFixed(2)
-            };
-        } catch (error) {
-            return { used: 0, usedMB: '0.00' };
-        }
-    }
-
-    clearAllData() {
-        localStorage.removeItem(this.sessionKey);
-        localStorage.removeItem(this.settingsKey);
     }
 }

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Photobook Challenge - Tournament Photo Selector</title>
+    <title>Image Ranker</title>
     <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -11,32 +11,41 @@
         <!-- Setup Screen -->
         <div id="setup-screen" class="screen active">
             <div class="container">
-                <h1>Photobook Challenge</h1>
-                <p>Select and rank your best photos using tournament-style comparisons</p>
-                
+                <h1>Image Ranker</h1>
+                <p class="subtitle">Efficiently rank your images using smart comparisons</p>
+
                 <div class="setup-section">
-                    <h3>Choose Local Images</h3>
-                    <input type="file" id="image-input" multiple accept="image/*" webkitdirectory directory>
-                    <label for="image-input" class="file-button">Browse Local Folder</label>
+                    <h3>Select Images</h3>
+                    <input type="file" id="image-input" multiple accept="image/*" webkitdirectory>
+                    <label for="image-input" class="file-button">Browse Folder</label>
                     <div id="image-count" class="status-text">No images selected</div>
                 </div>
 
                 <div class="setup-section">
-                    <h3>Tournament Settings</h3>
+                    <h3>Settings</h3>
                     <div class="setting">
-                        <label for="target-count">Target Final Count:</label>
-                        <input type="number" id="target-count" value="20" min="3" max="100">
+                        <label for="target-count">Target Top N:</label>
+                        <input type="number" id="target-count" value="20" min="5" max="100">
                     </div>
                     <div class="setting">
                         <label for="initial-lives">Initial Lives:</label>
-                        <input type="number" id="initial-lives" value="3" min="1" max="10">
+                        <input type="number" id="initial-lives" value="3" min="1" max="5">
+                    </div>
+                </div>
+
+                <div id="resume-section" class="setup-section" style="display: none;">
+                    <h3>Resume Previous Session</h3>
+                    <p id="resume-info"></p>
+                    <div class="resume-buttons">
+                        <button id="resume-btn" class="secondary-button">Resume</button>
+                        <button id="clear-session-btn" class="danger-button">Clear</button>
                     </div>
                 </div>
 
                 <div class="setup-section">
-                    <h3>Resume Previous Session</h3>
+                    <h3>Import Data</h3>
                     <input type="file" id="csv-input" accept=".csv">
-                    <label for="csv-input" class="file-button secondary">Import CSV Data</label>
+                    <label for="csv-input" class="file-button secondary">Import CSV</label>
                 </div>
 
                 <button id="start-tournament" class="primary-button" disabled>Start Tournament</button>
@@ -51,64 +60,59 @@
                         <div id="progress-fill" class="progress-fill"></div>
                     </div>
                     <div class="progress-text">
-                        <span id="progress-label">Phase 1: Knockout Tournament</span>
-                        <span id="progress-stats">0 / 100 comparisons</span>
+                        <span id="phase-label">Phase 1: Knockout</span>
+                        <span id="progress-stats">0 / 0</span>
                     </div>
                 </div>
-                
-                <div class="controls">
-                    <button id="pause-tournament" class="secondary-button">Pause</button>
-                    <button id="export-csv" class="secondary-button">Export CSV</button>
+                <div class="header-controls">
+                    <button id="pause-btn" class="secondary-button">Pause</button>
+                    <button id="export-btn" class="secondary-button">Export</button>
                 </div>
             </div>
 
             <div class="comparison-area">
-                <div class="image-container">
-                    <div class="image-wrapper">
-                        <img id="image-a" class="comparison-image" alt="Image A">
-                        <div class="image-label">A</div>
-                    </div>
-                    <div class="vs-divider">VS</div>
-                    <div class="image-wrapper">
-                        <img id="image-b" class="comparison-image" alt="Image B">
-                        <div class="image-label">B</div>
-                    </div>
+                <div class="image-panel">
+                    <img id="image-a" class="comparison-image" alt="Image A">
+                    <div class="image-label">A</div>
                 </div>
 
                 <div class="comparison-controls">
-                    <button id="a-slight" class="comparison-button slight" data-key="1">
-                        <span class="key">1</span>
-                        A Better
+                    <button class="comparison-button slight" data-result="A_wins">
+                        <span class="key-hint">1</span>
+                        A &gt; B
                     </button>
-                    <button id="a-knockout" class="comparison-button knockout" data-key="2">
-                        <span class="key">2</span>
-                        A Much Better
+                    <button class="comparison-button knockout" data-result="A_ko">
+                        <span class="key-hint">2</span>
+                        A &gt;&gt; B
                     </button>
-                    <button id="b-knockout" class="comparison-button knockout" data-key="3">
-                        <span class="key">3</span>
-                        B Much Better
+                    <button class="comparison-button knockout" data-result="B_ko">
+                        <span class="key-hint">3</span>
+                        B &gt;&gt; A
                     </button>
-                    <button id="b-slight" class="comparison-button slight" data-key="4">
-                        <span class="key">4</span>
-                        B Better
+                    <button class="comparison-button slight" data-result="B_wins">
+                        <span class="key-hint">4</span>
+                        B &gt; A
                     </button>
+                </div>
+
+                <div class="image-panel">
+                    <img id="image-b" class="comparison-image" alt="Image B">
+                    <div class="image-label">B</div>
                 </div>
             </div>
 
-            <div class="tournament-info">
-                <div class="stats-grid">
-                    <div class="stat">
-                        <div class="stat-value" id="remaining-images">0</div>
-                        <div class="stat-label">Images Remaining</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value" id="eliminated-images">0</div>
-                        <div class="stat-label">Eliminated</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value" id="current-round">1</div>
-                        <div class="stat-label">Current Round</div>
-                    </div>
+            <div class="stats-bar">
+                <div class="stat">
+                    <span class="stat-value" id="remaining-count">0</span>
+                    <span class="stat-label">Remaining</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value" id="eliminated-count">0</span>
+                    <span class="stat-label">Eliminated</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value" id="round-count">1</span>
+                    <span class="stat-label">Round</span>
                 </div>
             </div>
         </div>
@@ -116,29 +120,28 @@
         <!-- Results Screen -->
         <div id="results-screen" class="screen">
             <div class="container">
-                <h2>Tournament Results</h2>
-                <div class="results-header">
-                    <div class="results-info">
-                        <span id="final-count">0</span> images ranked from <span id="total-processed">0</span> total
-                    </div>
-                    <div class="results-controls">
-                        <button id="export-results" class="primary-button">Export Results</button>
-                        <button id="new-tournament" class="secondary-button">New Tournament</button>
-                    </div>
+                <h1>Final Rankings</h1>
+                <div class="results-info">
+                    <span id="results-summary"></span>
                 </div>
-                
-                <div id="results-grid" class="results-grid">
-                    <!-- Results will be populated here -->
+
+                <div id="results-grid" class="results-grid"></div>
+
+                <div class="results-actions">
+                    <button id="export-results-btn" class="primary-button">Export CSV</button>
+                    <button id="copy-filenames-btn" class="secondary-button">Copy Filenames</button>
+                    <button id="new-tournament-btn" class="secondary-button">New Tournament</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Modal for image zoom -->
+    <!-- Zoom Modal -->
     <div id="zoom-modal" class="modal">
+        <div class="modal-backdrop"></div>
         <div class="modal-content">
-            <span class="close">&times;</span>
-            <img id="zoomed-image" class="zoomed-image" alt="Zoomed image">
+            <img id="zoomed-image" alt="Zoomed image">
+            <button class="modal-close">&times;</button>
         </div>
     </div>
 
